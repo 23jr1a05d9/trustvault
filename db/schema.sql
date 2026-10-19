@@ -85,3 +85,9 @@ CREATE OR REPLACE TRIGGER audit_no_update_delete
 CREATE OR REPLACE TRIGGER audit_no_truncate
   BEFORE TRUNCATE ON audit_log
   FOR EACH STATEMENT EXECUTE FUNCTION audit_log_block_changes();
+
+-- DOCUMENT_BLOBS: the file bytes, kept apart from the document details.
+CREATE TABLE IF NOT EXISTS document_blobs (
+  document_id uuid PRIMARY KEY REFERENCES documents(id),
+  data        bytea NOT NULL
+);

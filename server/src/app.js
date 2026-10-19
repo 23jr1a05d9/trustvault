@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const pool = require('./db');
 const authRoutes = require('./routes/auth');
+const documentRoutes = require('./routes/documents');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -22,6 +23,7 @@ app.get('/health', async (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/documents', documentRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
