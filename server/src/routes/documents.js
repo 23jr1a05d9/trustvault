@@ -123,24 +123,61 @@ router.post('/', ownersOnly, receiveFile, async (req, res) => {
   }
 });
 
-// LIST: only documents the caller owns or holds a current grant for.
-// The permission filter is inside the query, so nothing else is ever fetched.
+const searchSchema = z.object({
+  q: z.string().trim().max(100).optional(),
+  owner: z.string().trim().max(100).optional(),
+  category: z.string().trim().max(50).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => !Number.isNaN(Date.parse(v))).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => !Number.isNaN(Date.parse(v))).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(10000).default(0),
+});
+
+// Makes %, _ and \ in what the user typed match literally, not as wildcards.
+const like = (s) => '%' + s.replace(/[\\%_]/g, '\\$&') + '%';
+
+// LIST + SEARCH: only documents the caller owns or holds a current grant for.
+// The permission filter is in the SQL, so unauthorised documents are never
+// fetched, never counted and never visible through any filter.
 router.get('/', async (req, res) => {
+  const parsed = searchSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid search filters' });
+  const f = parsed.data;
+
+  const params = [req.user.id];
+  const where = ['d.deleted_at IS NULL', '(d.owner_id = $1 OR g.id IS NOT NULL)'];
+  const next = (value) => { params.push(value); return '$' + params.length; };
+
+  if (f.q) {
+    const p = next(like(f.q));
+    where.push(`(d.title ILIKE ${p} OR d.original_filename ILIKE ${p})`);
+  }
+  if (f.owner) where.push(`u.name ILIKE ${next(like(f.owner))}`);
+  if (f.category) where.push(`lower(d.category) = lower(${next(f.category)})`);
+  if (f.from) where.push(`d.created_at >= ${next(f.from)}::date`);
+  if (f.to) where.push(`d.created_at < (${next(f.to)}::date + 1)`);
+
+  const limitP = next(f.limit);
+  const offsetP = next(f.offset);
+
   const { rows } = await pool.query(
     `SELECT d.id, d.title, d.category, d.original_filename, d.mime_type, d.size_bytes,
             d.created_at, d.owner_id, u.name AS owner_name,
-            CASE WHEN d.owner_id = $1 THEN 'owner' ELSE g.level END AS access
+            CASE WHEN d.owner_id = $1 THEN 'owner' ELSE g.level END AS access,
+            count(*) OVER() AS total
        FROM documents d
        JOIN users u ON u.id = d.owner_id
        LEFT JOIN grants g
          ON g.document_id = d.id AND g.user_id = $1
         AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > now())
-      WHERE d.deleted_at IS NULL AND (d.owner_id = $1 OR g.id IS NOT NULL)
+      WHERE ${where.join(' AND ')}
       ORDER BY d.created_at DESC
-      LIMIT 200`,
-    [req.user.id]
+      LIMIT ${limitP} OFFSET ${offsetP}`,
+    params
   );
-  res.json(rows);
+
+  res.set('X-Total-Count', String(rows[0] ? rows[0].total : 0));
+  res.json(rows.map(({ total, ...doc }) => doc));
 });
 
 // DETAILS
