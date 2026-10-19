@@ -6,6 +6,7 @@ const pool = require('./db');
 const authRoutes = require('./routes/auth');
 const documentRoutes = require('./routes/documents');
 const grantRoutes = require('./routes/grants');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -26,6 +27,7 @@ app.get('/health', async (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/documents/:id/grants', grantRoutes); // before the documents router
 app.use('/api/documents', documentRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
