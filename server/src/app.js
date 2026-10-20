@@ -29,6 +29,9 @@ app.use('/api/documents/:id/grants', grantRoutes); // before the documents route
 app.use('/api/documents', documentRoutes);
 app.use('/api/admin', adminRoutes);
 
+app.get('/', (req, res) => {
+  res.json({ name: 'TrustVault API', status: 'ok' });
+});
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 // Last resort: never show internal details to the caller.
