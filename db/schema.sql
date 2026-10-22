@@ -91,3 +91,21 @@ CREATE TABLE IF NOT EXISTS document_blobs (
   document_id uuid PRIMARY KEY REFERENCES documents(id),
   data        bytea NOT NULL
 );
+
+-- New accounts start as 'pending' and can do nothing until an administrator
+-- gives them a role. Safe to run again.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check
+  CHECK (role IN ('admin', 'owner', 'viewer', 'pending'));
+
+
+
+-- RECOVERY_CODES: one-time codes a person saves so they can reset a forgotten
+-- password themselves. Only a hash of each code is stored.
+CREATE TABLE IF NOT EXISTS recovery_codes (
+  code_hash  text PRIMARY KEY,
+  user_id    uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  used_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS recovery_codes_user ON recovery_codes (user_id);
