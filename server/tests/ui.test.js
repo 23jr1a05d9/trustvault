@@ -23,3 +23,9 @@ test('server files are not exposed through the web page', async () => {
     expect((await request(app).get(p)).status).toBe(404);
   }
 });
+
+test('the login illustration is served as an image', async () => {
+  const res = await request(app).get('/vault.svg');
+  expect(res.status).toBe(200);
+  expect(res.headers['content-type']).toMatch(/svg/);
+});

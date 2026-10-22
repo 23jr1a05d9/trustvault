@@ -17,12 +17,19 @@ const RULES = [
 ];
 
 const DEMOS = [
-  { role: 'admin', email: 'admin@trustvault.test', password: 'AdminDemo#2026', text: 'Sees activity and the audit chain, manages users. Cannot open files.' },
-  { role: 'owner', email: 'owner@trustvault.test', password: 'OwnerDemo#2026', text: 'Uploads documents and shares them with named people.' },
-  { role: 'viewer', email: 'viewer@trustvault.test', password: 'ViewerDemo#2026', text: 'Sees only the documents shared with them.' },
+  { role: 'admin', label: 'Admin', icon: 'key', email: 'admin@trustvault.test', password: 'AdminDemo#2026', text: 'Approves accounts and watches the audit trail. Cannot open files.' },
+  { role: 'owner', label: 'Owner', icon: 'upload', email: 'owner@trustvault.test', password: 'OwnerDemo#2026', text: 'Uploads documents and shares them with named people.' },
+  { role: 'viewer', label: 'Viewer', icon: 'eye', email: 'viewer@trustvault.test', password: 'ViewerDemo#2026', text: 'Sees only the documents shared with them.' },
 ];
 
-// ---------- small helpers ----------
+const ROLE_INFO = {
+  admin: ['Administration', 'Approve new accounts, watch activity and verify the audit chain. File contents stay private.'],
+  owner: ['Your document space', 'Upload documents and decide exactly who may open them.'],
+  viewer: ['Shared with you', 'Documents that owners have given you access to appear here.'],
+  pending: ['Almost there', 'An administrator has to give your account a role first.'],
+};
+
+// ---------- helpers ----------
 // Builds an element. Text is always inserted as text, never as HTML.
 function el(tag, attrs = {}, ...kids) {
   const node = document.createElement(tag);
@@ -55,6 +62,17 @@ const ICONS = {
   shield: [['path', { d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }], ['path', { d: 'M9 12l2 2 4-4' }]],
   check: [['path', { d: 'M20 6L9 17l-5-5' }]],
   file: [['path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M14 2v6h6' }]],
+  lock: [['rect', { x: 3, y: 11, width: 18, height: 11, rx: 2, ry: 2 }], ['path', { d: 'M7 11V7a5 5 0 0 1 10 0v4' }]],
+  users: [
+    ['path', { d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2' }], ['circle', { cx: 9, cy: 7, r: 4 }],
+    ['path', { d: 'M23 21v-2a4 4 0 0 0-3-3.87' }], ['path', { d: 'M16 3.13a4 4 0 0 1 0 7.75' }],
+  ],
+  activity: [['polyline', { points: '22 12 18 12 15 21 9 3 6 12 2 12' }]],
+  upload: [
+    ['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }], ['polyline', { points: '17 8 12 3 7 8' }],
+    ['line', { x1: 12, y1: 3, x2: 12, y2: 15 }],
+  ],
+  key: [['path', { d: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4' }]],
 };
 function icon(name, size = 18) {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -74,6 +92,12 @@ function toast(message, bad) {
   $toast.className = 'show' + (bad ? ' bad' : '');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { $toast.className = ''; }, 4000);
+}
+
+function shake(node) {
+  node.classList.remove('shake');
+  void node.offsetWidth; // restart the animation
+  node.classList.add('shake');
 }
 
 async function withBusy(button, fn) {
@@ -121,6 +145,49 @@ function table(headers, rows) {
       el('tbody', {}, rows.map((r) => el('tr', {}, r.map((c) => el('td', {}, c)))))));
 }
 
+// Counts a number up from 0, unless the person asked for less motion.
+function countUp(node, to) {
+  to = Number(to) || 0;
+  if (to === 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    node.textContent = String(to);
+    return;
+  }
+  const start = performance.now();
+  const duration = 700;
+  function tick(now) {
+    const p = Math.min(1, (now - start) / duration);
+    node.textContent = String(Math.round(to * (1 - Math.pow(1 - p, 3))));
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function tile(label, iconName) {
+  const value = el('strong', { text: '-' });
+  const node = el('div', { class: 'tile' },
+    el('span', { class: 'tile-icon' }, icon(iconName, 18)),
+    el('span', { class: 'tile-text' }, value, el('span', { text: label })));
+  return {
+    node,
+    set(v, tone) {
+      if (typeof v === 'number') countUp(value, v); else value.textContent = String(v);
+      node.dataset.tone = tone || '';
+    },
+  };
+}
+
+// The coloured banner at the top of each dashboard.
+function welcome(tiles) {
+  const [eyebrow, text] = ROLE_INFO[state.user.role] || ROLE_INFO.viewer;
+  const first = (state.user.name || '').split(' ')[0] || 'there';
+  return el('section', { class: 'welcome' },
+    el('div', { class: 'welcome-text' },
+      el('span', { class: 'eyebrow', text: eyebrow }),
+      el('h2', { text: 'Welcome back, ' + first }),
+      el('p', { text })),
+    el('div', { class: 'tiles' }, tiles.map((t) => t.node)));
+}
+
 // ---------- login and registration ----------
 function passwordField(autocomplete) {
   const input = el('input', { type: 'password', required: true, autocomplete, placeholder: 'Your password' });
@@ -136,117 +203,124 @@ function passwordField(autocomplete) {
 }
 
 function heroPanel() {
-  const point = (text) => el('li', {}, icon('check', 20), el('span', { text }));
-  return el('section', { class: 'hero' },
-    el('span', { class: 'blob b1' }),
-    el('span', { class: 'blob b2' }),
+  const art = el('img', { class: 'art', src: '/vault.svg', alt: 'A shield protecting documents, with an audit log beside it', width: '520', height: '420' });
+  const hero = el('section', { class: 'hero' },
+    el('span', { class: 'blob b1' }), el('span', { class: 'blob b2' }), el('span', { class: 'grid-lines' }),
     el('div', { class: 'hero-inner' },
-      el('div', { class: 'logo' }, icon('shield', 34)),
-      el('h2', { text: 'Documents that only the right people can open.' }),
-      el('ul', { class: 'points' },
-        point('The server checks access on every single request.'),
-        point('Every open, download and refusal goes into a tamper-evident log.'),
-        point('Take access away and it stops on the very next request.'))));
+      el('div', { class: 'brand-chip' }, icon('shield', 18), el('span', { text: 'TrustVault' })),
+      el('h2', {}, 'Only the right people.', el('br'), el('span', { class: 'grad', text: 'Every access on record.' })),
+      el('p', { class: 'lead', text: 'Share confidential documents with permissions that hold, and an audit trail you can prove.' }),
+      el('div', { class: 'art-wrap' }, art),
+      el('ul', { class: 'pills' },
+        ['Checked on the server', 'Tamper-evident log', 'Revoke instantly'].map((t) => el('li', {}, icon('check', 16), el('span', { text: t }))))));
+  hero.addEventListener('mousemove', (e) => {
+    const r = hero.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5;
+    const y = (e.clientY - r.top) / r.height - 0.5;
+    art.style.transform = 'translate(' + (x * 18).toFixed(1) + 'px,' + (y * 12).toFixed(1) + 'px)';
+  });
+  hero.addEventListener('mouseleave', () => { art.style.transform = ''; });
+  return hero;
 }
 
 function loginView() {
-  let registering = false;
+  // ----- front of the card: log in -----
   const email = el('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'you@company.com' });
-  const name = el('input', { type: 'text', maxlength: '100', autocomplete: 'name', placeholder: 'Your full name' });
   const pw = passwordField('current-password');
-  const nameRow = el('label', { class: 'hidden' }, 'Full name', name);
-  const title = el('h2', { text: 'Welcome back' });
-  const sub = el('p', { class: 'muted', text: 'Log in to open your documents.' });
-  const submitText = el('span', { text: 'Log in' });
-  const submit = el('button', { type: 'submit' }, submitText);
-  const toggle = el('button', { type: 'button', class: 'link', text: 'New here? Create an account' });
-
+  const loginBtn = el('button', { type: 'submit' }, el('span', { text: 'Log in' }));
   const forgot = el('button', { type: 'button', class: 'link', text: 'Forgot password?', onclick: () => { authScreen = 'forgot'; render(); } });
-  const forgotRow = el('div', { class: 'forgot' }, forgot);
-  const forgotInfo = el('p', { class: 'note hidden', text: 'Ask your administrator for a password reset link. Open it to choose a new password.' });
-  forgot.addEventListener('click', () => forgotInfo.classList.toggle('hidden'));
-
-  const meterBar = el('span');
-  const meter = el('div', { class: 'meter' }, meterBar);
-  const checks = RULES.map(([text]) => el('li', { text }));
-  const policy = el('div', { class: 'policy hidden' }, meter, el('ul', { class: 'checks' }, checks));
-
-  function updatePolicy() {
-    const p = pw.input.value;
-    let passed = 0;
-    RULES.forEach(([, test], i) => {
-      const ok = test(p);
-      checks[i].classList.toggle('ok', ok);
-      if (ok) passed++;
+  const demoNote = el('p', { class: 'muted demo-note', text: 'Pick a role and its demo login is filled in for you.' });
+  const chips = DEMOS.map((d) => {
+    const chip = el('button', { type: 'button', class: 'demo-chip ' + d.role, title: d.text, 'aria-pressed': 'false' }, icon(d.icon, 20), el('span', { text: d.label }));
+    chip.addEventListener('click', () => {
+      email.value = d.email;
+      pw.input.value = d.password;
+      chips.forEach((c) => { c.classList.remove('active'); c.setAttribute('aria-pressed', 'false'); });
+      chip.classList.add('active');
+      chip.setAttribute('aria-pressed', 'true');
+      demoNote.textContent = d.text;
+      loginBtn.focus();
     });
-    meterBar.style.width = (passed / RULES.length) * 100 + '%';
-    meter.dataset.level = passed <= 2 ? 'weak' : passed < RULES.length ? 'fair' : 'strong';
-    submit.disabled = registering && passed < RULES.length;
-  }
-  pw.input.addEventListener('input', updatePolicy);
-
-  function setMode(reg) {
-    registering = reg;
-    title.textContent = reg ? 'Create your account' : 'Welcome back';
-    sub.textContent = reg ? 'An administrator approves new accounts before documents can be shared with you.' : 'Log in to open your documents.';
-    submitText.textContent = reg ? 'Create account' : 'Log in';
-    toggle.textContent = reg ? 'Already have an account? Log in' : 'New here? Create an account';
-    nameRow.classList.toggle('hidden', !reg);
-    policy.classList.toggle('hidden', !reg);
-    forgotRow.classList.toggle('hidden', reg);
-    forgotInfo.classList.add('hidden');
-    name.required = reg;
-    pw.input.setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
-    updatePolicy();
-  }
-  toggle.addEventListener('click', () => setMode(!registering));
-
-  const form = el('form', { class: 'card auth-card pop' }, title, sub,
-    el('label', {}, 'Email', email), nameRow, pw.node, forgotRow, policy, submit, toggle);
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    await withBusy(submit, async () => {
-      try {
-        if (registering) {
-          const { data } = await api('/api/auth/register', {
-            method: 'POST', json: { email: email.value, name: name.value, password: pw.input.value },
-          });
-          toast(data.message);
-          pw.input.value = '';
-          setMode(false);
-        } else {
-          const { data } = await api('/api/auth/login', {
-            method: 'POST', json: { email: email.value, password: pw.input.value },
-          });
-          state.user = data;
-          state.tab = data.role === 'admin' ? 'admin' : 'documents';
-          render();
-        }
-      } catch (err) {
-        toast(err.message, true);
-        form.classList.remove('shake');
-        void form.offsetWidth; // restart the animation
-        form.classList.add('shake');
-      }
-    });
-    updatePolicy();
+    return chip;
   });
 
-  const demo = el('div', { class: 'demo' },
-    el('p', { class: 'muted', text: 'Try a demo account (one click fills it in)' }),
-    el('div', { class: 'chips' }, DEMOS.map((d) => el('button', {
-      type: 'button', class: 'chip ' + d.role,
-      onclick: () => {
-        setMode(false);
-        email.value = d.email;
-        pw.input.value = d.password;
-        updatePolicy();
-        toast('Filled in the ' + d.role + ' account. Press Log in.');
-      },
-    }, el('strong', { text: d.role }), el('span', { text: d.text })))));
+  const front = el('form', { class: 'card face front' },
+    el('div', { class: 'face-head' },
+      el('h2', { text: 'Welcome back' }),
+      el('p', { class: 'muted', text: 'Log in to open your documents.' })),
+    el('label', {}, 'Email', email),
+    pw.node,
+    el('div', { class: 'forgot' }, forgot),
+    loginBtn,
+    el('div', { class: 'divider' }, el('span', { text: 'or try a demo role' })),
+    el('div', { class: 'demo-row' }, chips),
+    demoNote,
+    el('button', { type: 'button', class: 'link', text: 'New here? Create an account', onclick: () => flip(true) }));
 
-  return el('div', { class: 'auth-wrap' }, heroPanel(), el('section', { class: 'panel' }, form, demo));
+  // ----- back of the card: create an account -----
+  const rName = el('input', { type: 'text', required: true, maxlength: '100', autocomplete: 'name', placeholder: 'Your full name' });
+  const rEmail = el('input', { type: 'email', required: true, autocomplete: 'username', placeholder: 'you@company.com' });
+  const rPw = passwordField('new-password');
+  const rPolicy = policyBlock();
+  const rBtn = el('button', { type: 'submit', disabled: true }, el('span', { text: 'Create account' }));
+  rPw.input.addEventListener('input', () => { rBtn.disabled = !rPolicy.update(rPw.input.value); });
+
+  const back = el('form', { class: 'card face back' },
+    el('div', { class: 'face-head' },
+      el('h2', { text: 'Create your account' }),
+      el('p', { class: 'muted', text: 'An administrator approves new accounts before documents can be shared with you.' })),
+    el('label', {}, 'Full name', rName),
+    el('label', {}, 'Email', rEmail),
+    rPw.node,
+    rPolicy.node,
+    rBtn,
+    el('button', { type: 'button', class: 'link', text: 'Already have an account? Log in', onclick: () => flip(false) }));
+
+  const card = el('div', { class: 'flip pop' }, el('div', { class: 'flip-inner' }, front, back));
+  back.inert = true;
+  function flip(toRegister) {
+    card.classList.toggle('flipped', toRegister);
+    front.inert = toRegister;
+    back.inert = !toRegister;
+    setTimeout(() => (toRegister ? rName : email).focus(), 450);
+  }
+
+  front.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await withBusy(loginBtn, async () => {
+      try {
+        const { data } = await api('/api/auth/login', { method: 'POST', json: { email: email.value, password: pw.input.value } });
+        state.user = data;
+        state.tab = data.role === 'admin' ? 'admin' : 'documents';
+        render();
+      } catch (err) {
+        toast(err.message, true);
+        shake(card);
+      }
+    });
+  });
+
+  back.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await withBusy(rBtn, async () => {
+      try {
+        const { data } = await api('/api/auth/register', {
+          method: 'POST', json: { email: rEmail.value, name: rName.value, password: rPw.input.value },
+        });
+        toast(data.message);
+        email.value = rEmail.value;
+        rPw.input.value = '';
+        rPolicy.update('');
+        flip(false);
+      } catch (err) {
+        toast(err.message, true);
+        shake(card);
+      }
+    });
+    rBtn.disabled = !rPolicy.update(rPw.input.value);
+  });
+
+  return el('div', { class: 'auth-wrap' }, heroPanel(), el('section', { class: 'panel' }, card));
 }
 
 // ---------- documents ----------
@@ -370,7 +444,7 @@ async function sharingPanel(docId) {
   updateCount();
 
   return el('div', { class: 'card pop' },
-    el('h3', { text: 'Share this document' }),
+    el('h3', { class: 'section-title' }, icon('users', 20), 'Share this document'),
     search,
     el('div', { class: 'actions' },
       el('button', { type: 'button', class: 'link', text: 'Select all shown', onclick: () => { shownIds.forEach((id) => selected.add(id)); drawPeople(); updateCount(); } }),
@@ -384,11 +458,17 @@ async function sharingPanel(docId) {
 async function documentsView() {
   if (state.user.role === 'pending') {
     return el('div', { class: 'stack view' },
+      welcome([]),
       el('div', { class: 'empty' }, icon('shield', 36),
         el('h2', { text: 'Waiting for approval' }),
         el('p', { text: 'Your account was created. An administrator has to give it a role before documents can be shared with you.' })));
   }
+
   const isOwner = state.user.role === 'owner';
+  const tiles = isOwner
+    ? [tile('Documents you can open', 'file'), tile('Owned by you', 'upload'), tile('Shared with you', 'users')]
+    : [tile('Shared with you', 'users'), tile('You can edit', 'key'), tile('Read only', 'eye')];
+
   const emptyDetail = () => el('div', { class: 'empty' }, icon('file', 36), el('p', { text: 'Select a document to see its details.' }));
   const detail = el('div', { class: 'stack sticky' }, emptyDetail());
   const list = el('div', { class: 'list' });
@@ -415,7 +495,20 @@ async function documentsView() {
     }
     try {
       const { data, res } = await api('/api/documents?' + params);
-      count.textContent = res.headers.get('X-Total-Count') || '0';
+      const total = Number(res.headers.get('X-Total-Count') || 0);
+      count.textContent = String(total);
+      if (params.toString() === '') {
+        const owned = data.filter((d) => d.access === 'owner').length;
+        if (isOwner) {
+          tiles[0].set(total);
+          tiles[1].set(owned);
+          tiles[2].set(data.length - owned);
+        } else {
+          tiles[0].set(total);
+          tiles[1].set(data.filter((d) => d.access === 'edit').length);
+          tiles[2].set(data.filter((d) => d.access === 'read').length);
+        }
+      }
       if (data.length === 0) {
         setKids(list, el('div', { class: 'empty' }, icon('file', 36),
           el('p', { text: isOwner ? 'No documents found. Upload one above.' : 'Nothing has been shared with you yet.' })));
@@ -423,7 +516,7 @@ async function documentsView() {
       }
       setKids(list, data.map((d, i) => {
         const row = el('button', {
-          type: 'button', class: 'row',
+          type: 'button', class: 'row', 'data-access': d.access,
           onclick: () => {
             list.querySelectorAll('.row.active').forEach((r) => r.classList.remove('active'));
             row.classList.add('active');
@@ -483,7 +576,7 @@ async function documentsView() {
     const cat = el('input', { type: 'text', maxlength: '50', placeholder: 'Category (e.g. hr)' });
     const file = el('input', { type: 'file', required: true });
     const fileText = el('span', { text: defaultText });
-    const drop = el('label', { class: 'drop' }, icon('file', 22), fileText, file);
+    const drop = el('label', { class: 'drop' }, icon('upload', 22), fileText, file);
     const uploadBtn = el('button', { type: 'submit', text: 'Upload' });
     const form = el('form', { class: 'card filters' }, title, cat, drop, uploadBtn);
 
@@ -519,18 +612,22 @@ async function documentsView() {
 
   await load();
   return el('div', { class: 'stack view' },
-    el('div', { class: 'page-head' }, el('h2', { text: 'Documents' }), count),
+    welcome(tiles),
     isOwner && uploadForm(),
     filters,
-    el('div', { class: 'grid' }, list, detail));
+    el('div', { class: 'grid' },
+      el('div', {}, el('div', { class: 'list-head' }, el('h3', { text: 'Documents' }), count), list),
+      detail));
 }
 
 // ---------- admin ----------
-const statCard = (label, value, tone) =>
-  el('div', { class: 'stat ' + (tone || '') }, el('span', { class: 'muted', text: label }), el('strong', { text: String(value) }));
-
 async function adminView() {
-  const stats = el('div', { class: 'stats' });
+  const tiles = [
+    tile('Events, 24 hours', 'activity'),
+    tile('Refused, 24 hours', 'lock'),
+    tile('Waiting approval', 'users'),
+    tile('Audit chain', 'shield'),
+  ];
   const summary = el('div', { class: 'card' });
   const auditBox = el('div', { class: 'card' });
   const usersBox = el('div', { class: 'card' });
@@ -541,10 +638,9 @@ async function adminView() {
       const r = data.notable;
       const total = data.last24h.reduce((s, x) => s + x.n, 0);
       const denied = data.last24h.filter((x) => x.outcome === 'denied').reduce((s, x) => s + x.n, 0);
-      setKids(stats,
-        statCard('Events, last 24 hours', total),
-        statCard('Refused, last 24 hours', denied, denied ? 'warn' : ''),
-        statCard('Audit chain', data.chain.ok ? 'Intact' : 'BROKEN', data.chain.ok ? 'ok' : 'bad'));
+      tiles[0].set(total);
+      tiles[1].set(denied, denied ? 'warn' : '');
+      tiles[3].set(data.chain.ok ? 'Intact' : 'BROKEN', data.chain.ok ? 'ok' : 'bad');
 
       const verifyBtn = el('button', { type: 'button', class: 'ghost small', text: 'Verify now' });
       verifyBtn.addEventListener('click', () => withBusy(verifyBtn, async () => {
@@ -557,7 +653,7 @@ async function adminView() {
 
       const nothing = r.repeated_refused_access.length + r.repeated_failed_logins.length === 0;
       setKids(summary,
-        el('h2', { text: 'Worth noticing (last 24 hours)' }),
+        el('h2', { class: 'section-title' }, icon('shield', 20), 'Worth noticing (last 24 hours)'),
         el('p', {},
           'Audit chain: ',
           el('span', { class: data.chain.ok ? 'ok-text' : 'bad-text', text: data.chain.ok ? 'intact, ' + data.chain.checked + ' entries checked' : 'BROKEN at entry ' + data.chain.brokenAt }),
@@ -593,14 +689,15 @@ async function adminView() {
   }
   const auditForm = el('form', { class: 'filters' }, group, outcome, actor, el('button', { type: 'submit', text: 'Filter' }));
   auditForm.addEventListener('submit', (e) => { e.preventDefault(); loadAudit(); });
-  setKids(auditBox, el('h2', { text: 'Activity and permission changes' }), auditForm, auditList);
+  setKids(auditBox, el('h2', { class: 'section-title' }, icon('activity', 20), 'Activity and permission changes'), auditForm, auditList);
 
-    async function loadUsers() {
+  async function loadUsers() {
     try {
       const { data } = await api('/api/admin/users');
       const waiting = data.filter((u) => u.role === 'pending' && u.is_active);
+      tiles[2].set(waiting.length, waiting.length ? 'warn' : '');
       setKids(usersBox,
-        el('h2', { text: 'Users' }),
+        el('h2', { class: 'section-title' }, icon('users', 20), 'Users'),
         waiting.length > 0
           ? el('p', { class: 'note', text: waiting.length + (waiting.length === 1 ? ' account is' : ' accounts are') + ' waiting for approval. Give each one a role below.' })
           : el('p', { class: 'muted', text: 'No accounts are waiting for approval.' }),
@@ -638,7 +735,7 @@ async function adminView() {
   }
 
   await Promise.all([loadSummary(), loadAudit(), loadUsers()]);
-  return el('div', { class: 'stack view' }, el('div', { class: 'page-head' }, el('h2', { text: 'Administration' })), stats, summary, auditBox, usersBox);
+  return el('div', { class: 'stack view' }, welcome(tiles), summary, auditBox, usersBox);
 }
 
 // ---------- shell ----------
@@ -650,19 +747,20 @@ async function logout() {
 
 async function render() {
   document.body.classList.toggle('is-auth', !state.user);
+  document.body.dataset.role = state.user ? state.user.role : '';
   $nav.replaceChildren();
   if (!state.user) {
     $app.replaceChildren(authScreen === 'forgot' ? forgotView() : loginView());
     return;
   }
   authScreen = 'login';
-  const tabs = state.user.role === 'admin' ? [['admin', 'Admin']] : [['documents', 'Documents']];
-  tabs.push(['account', 'Account']);
-  for (const [id, label] of tabs) {
+  const tabs = state.user.role === 'admin' ? [['admin', 'Admin', 'activity']] : [['documents', 'Documents', 'file']];
+  tabs.push(['account', 'Account', 'key']);
+  for (const [id, label, ico] of tabs) {
     $nav.append(el('button', {
-      class: state.tab === id ? 'tab active' : 'tab', text: label,
+      class: state.tab === id ? 'tab active' : 'tab',
       onclick: () => { state.tab = id; render(); },
-    }));
+    }, icon(ico, 16), el('span', { text: label })));
   }
   $nav.append(
     el('span', { class: 'who' },

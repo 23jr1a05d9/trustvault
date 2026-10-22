@@ -33,12 +33,13 @@ function forgotView() {
   const code = el('input', { type: 'text', required: true, autocomplete: 'off', spellcheck: 'false', maxlength: '20', placeholder: 'XXXX-XXXX-XXXX' });
   const pw = pwField('New password', 'new-password');
   const policy = policyBlock();
-  const submit = el('button', { type: 'submit', disabled: true, text: 'Set new password' });
+  const submit = el('button', { type: 'submit', disabled: true }, el('span', { text: 'Set new password' }));
   pw.input.addEventListener('input', () => { submit.disabled = !policy.update(pw.input.value); });
 
   const form = el('form', { class: 'card auth-card pop' },
-    el('h2', { text: 'Reset your password' }),
-    el('p', { class: 'muted', text: 'Enter your email and one of the recovery codes you saved in your Account page.' }),
+    el('div', { class: 'face-head' },
+      el('h2', { text: 'Reset your password' }),
+      el('p', { class: 'muted', text: 'Enter your email and one of the recovery codes you saved in your Account page.' })),
     el('label', {}, 'Email', email),
     el('label', {}, 'Recovery code', code),
     pw.node, policy.node, submit,
@@ -57,9 +58,7 @@ function forgotView() {
         render();
       } catch (err) {
         toast(err.message, true);
-        form.classList.remove('shake');
-        void form.offsetWidth;
-        form.classList.add('shake');
+        shake(form);
       }
     });
     submit.disabled = !policy.update(pw.input.value);
@@ -98,10 +97,10 @@ async function accountView() {
   const current = pwField('Current password', 'current-password');
   const next = pwField('New password', 'new-password');
   const policy = policyBlock();
-  const changeBtn = el('button', { type: 'submit', disabled: true, text: 'Change password' });
+  const changeBtn = el('button', { type: 'submit', disabled: true }, el('span', { text: 'Change password' }));
   next.input.addEventListener('input', () => { changeBtn.disabled = !policy.update(next.input.value); });
-  const changeForm = el('form', { class: 'card auth-card limit' },
-    el('h2', { text: 'Change password' }),
+  const changeForm = el('form', { class: 'card form-card' },
+    el('h3', { class: 'section-title' }, icon('lock', 20), 'Change password'),
     el('p', { class: 'muted', text: 'Your other logins will end.' }),
     current.node, next.node, policy.node, changeBtn);
   changeForm.addEventListener('submit', async (e) => {
@@ -128,9 +127,9 @@ async function accountView() {
     } catch (err) { toast(err.message, true); }
   }
   const codesPw = pwField('Current password', 'current-password');
-  const codesBtn = el('button', { type: 'submit', text: 'Generate new codes' });
-  const codesForm = el('form', { class: 'card auth-card limit' },
-    el('h2', { text: 'Recovery codes' }),
+  const codesBtn = el('button', { type: 'submit' }, el('span', { text: 'Generate new codes' }));
+  const codesForm = el('form', { class: 'card form-card' },
+    el('h3', { class: 'section-title' }, icon('key', 20), 'Recovery codes'),
     el('p', { class: 'muted', text: 'Eight one-time codes that let you reset a forgotten password yourself. New codes replace the old ones.' }),
     status, codesPw.node, codesBtn);
   codesForm.addEventListener('submit', async (e) => {
@@ -148,10 +147,11 @@ async function accountView() {
   });
 
   await loadStatus();
-  return el('div', { class: 'stack view' },
-    el('div', { class: 'page-head' }, el('h2', { text: 'Account' })),
-    el('div', { class: 'card' }, el('p', {}, 'Signed in as ', el('strong', { text: state.user.email }))),
-    codesForm, changeForm);
+  const profile = el('section', { class: 'card profile' },
+    el('span', { class: 'avatar big', text: (state.user.name || '?').charAt(0).toUpperCase() }),
+    el('div', { class: 'profile-text' }, el('h2', { text: state.user.name }), el('p', { class: 'muted', text: state.user.email })),
+    el('span', { class: 'badge ' + state.user.role, text: state.user.role }));
+  return el('div', { class: 'stack view' }, profile, el('div', { class: 'grid2' }, codesForm, changeForm));
 }
 
 // A reminder shown until the person has saved some codes.
