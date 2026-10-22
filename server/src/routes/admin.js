@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const { z } = require('zod');
 const pool = require('../db');
@@ -128,7 +129,7 @@ router.get('/summary', async (req, res) => {
 // USERS
 router.get('/users', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, email, name, role, is_active, created_at FROM users ORDER BY created_at DESC LIMIT 500'
+    'SELECT id, email, name, role, is_active, created_at FROM users ORDER BY (role = \'pending\') DESC, created_at DESC LIMIT 500'
   );
   res.json(rows);
 });
@@ -136,7 +137,7 @@ router.get('/users', async (req, res) => {
 // Only these two fields can change. Anything else in the body is rejected.
 const patchSchema = z
   .object({
-    role: z.enum(['admin', 'owner', 'viewer']).optional(),
+    role: z.enum(['pending', 'viewer', 'owner', 'admin']).optional(),
     is_active: z.boolean().optional(),
   })
   .strict()
@@ -201,5 +202,6 @@ router.patch('/users/:id', async (req, res) => {
     client.release();
   }
 });
+
 
 module.exports = router;

@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
   };
 
   const found = await pool.query(
-    'SELECT id, email, name FROM users WHERE email = $1 AND is_active = true',
+    "SELECT id, email, name FROM users WHERE email = $1 AND is_active = true AND role IN ('viewer', 'owner')",
     [email]
   );
   const target = found.rows[0];

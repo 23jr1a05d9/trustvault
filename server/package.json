@@ -8,6 +8,7 @@
     "migrate": "node scripts/migrate.js",
     "seed": "node scripts/seed.js",
     "audit-check": "node scripts/audit-check.js",
+    "create-admin": "node scripts/create-admin.js",
     "test": "jest --runInBand"
   },
   "keywords": [],
