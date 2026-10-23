@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const express = require('express');
 const { z } = require('zod');
 const pool = require('../db');
@@ -9,6 +8,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EXPORT_LIMIT = 10000;
 
 // Every route below is admin-only. Refused attempts are audited too.
 async function adminOnly(req, res, next) {
@@ -35,7 +35,7 @@ const GROUPS = {
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => !Number.isNaN(Date.parse(v)));
 const auditSchema = z.object({
   group: z.enum(['documents', 'permissions', 'auth', 'admin']).optional(),
-  action: z.string().regex(/^[a-z]+(\.[a-z]+)*$/).max(50).optional(),
+  action: z.string().regex(/^[a-z_]+(\.[a-z_]+)*$/).max(50).optional(),
   outcome: z.enum(['allowed', 'denied']).optional(),
   actor: z.string().trim().max(100).optional(),
   document_id: z.string().regex(UUID_RE).optional(),
@@ -47,17 +47,11 @@ const auditSchema = z.object({
 
 const like = (s) => '%' + s.replace(/[\\%_]/g, '\\$&') + '%';
 
-// ACTIVITY: the audit trail, newest first. Document activity and permission
-// changes are the "group" filter. Hashes are left out; verify has its own route.
-router.get('/audit', async (req, res) => {
-  const parsed = auditSchema.safeParse(req.query);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid filters' });
-  const f = parsed.data;
-
-  const params = [];
+// Builds the WHERE part from validated filters. Every value goes in as a $n
+// parameter, so nothing typed by the caller is ever added to the SQL text.
+function auditWhere(f, params) {
   const where = [];
   const next = (v) => { params.push(v); return '$' + params.length; };
-
   if (f.group) where.push(`action LIKE ${next(GROUPS[f.group])}`);
   if (f.action) where.push(`action = ${next(f.action)}`);
   if (f.outcome) where.push(`outcome = ${next(f.outcome)}`);
@@ -65,20 +59,84 @@ router.get('/audit', async (req, res) => {
   if (f.document_id) where.push(`document_id = ${next(f.document_id)}`);
   if (f.from) where.push(`at >= ${next(f.from)}::date`);
   if (f.to) where.push(`at < (${next(f.to)}::date + 1)`);
-  const limitP = next(f.limit);
-  const offsetP = next(f.offset);
+  return where.length ? 'WHERE ' + where.join(' AND ') : '';
+}
+
+// ---------- CSV helpers ----------
+function csvCell(v) {
+  if (v === null || v === undefined) return '';
+  let s = v instanceof Date ? v.toISOString() : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  // A cell starting with = + - @ (or a tab or return) can run as a formula when
+  // the file is opened in a spreadsheet. A leading ' makes it plain text.
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+function toCsv(headers, rows) {
+  return [headers.map(csvCell).join(','), ...rows.map((r) => r.map(csvCell).join(','))].join('\r\n') + '\r\n';
+}
+function sendCsv(res, name, csv) {
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${name}"`,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.send('\ufeff' + csv); // the BOM makes Excel read it as UTF-8
+}
+const today = () => new Date().toISOString().slice(0, 10);
+
+// ACTIVITY: the audit trail, newest first. Hashes are left out; verify has its own route.
+router.get('/audit', async (req, res) => {
+  const parsed = auditSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid filters' });
+  const f = parsed.data;
+
+  const params = [];
+  const whereSql = auditWhere(f, params);
+  params.push(f.limit);
+  const limitP = '$' + params.length;
+  params.push(f.offset);
+  const offsetP = '$' + params.length;
 
   const { rows } = await pool.query(
     `SELECT seq, at, actor_id, actor_email, action, outcome, document_id,
             target_user_id, details, ip, count(*) OVER() AS total
        FROM audit_log
-       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       ${whereSql}
       ORDER BY seq DESC
       LIMIT ${limitP} OFFSET ${offsetP}`,
     params
   );
   res.set('X-Total-Count', String(rows[0] ? rows[0].total : 0));
   res.json(rows.map(({ total, ...row }) => row));
+});
+
+// EXPORT the activity log as CSV, with the same filters as the screen.
+router.get('/audit/export', async (req, res) => {
+  const parsed = auditSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid filters' });
+  const { limit, offset, ...filters } = parsed.data; // paging does not apply to an export
+
+  const params = [];
+  const whereSql = auditWhere(filters, params);
+  const { rows } = await pool.query(
+    `SELECT seq, at, actor_email, action, outcome, document_id, target_user_id, details, ip
+       FROM audit_log ${whereSql} ORDER BY seq DESC LIMIT ${EXPORT_LIMIT}`,
+    params
+  );
+  // Written BEFORE anything is sent. If the audit write fails, nothing is exported.
+  await record({
+    actor_id: req.user.id,
+    actor_email: req.user.email,
+    action: 'admin.export',
+    outcome: 'allowed',
+    details: { what: 'audit_log', rows: rows.length, filters },
+    ip: req.ip,
+  });
+  sendCsv(res, `trustvault-activity-${today()}.csv`, toCsv(
+    ['seq', 'time', 'actor', 'action', 'outcome', 'document_id', 'target_user_id', 'details', 'ip'],
+    rows.map((r) => [r.seq, r.at, r.actor_email, r.action, r.outcome, r.document_id, r.target_user_id, r.details, r.ip])
+  ));
 });
 
 // INTEGRITY: re-computes every hash in the chain.
@@ -126,12 +184,33 @@ router.get('/summary', async (req, res) => {
   });
 });
 
-// USERS
+// USERS. New sign-ups ('pending') come first so they are not missed.
 router.get('/users', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, email, name, role, is_active, created_at FROM users ORDER BY (role = \'pending\') DESC, created_at DESC LIMIT 500'
+    `SELECT id, email, name, role, is_active, created_at FROM users
+      ORDER BY (role = 'pending') DESC, created_at DESC LIMIT 500`
   );
   res.json(rows);
+});
+
+// EXPORT the user list as CSV. No password data is ever selected.
+router.get('/users/export', async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT id, name, email, role, is_active, created_at FROM users
+      ORDER BY created_at DESC LIMIT ${EXPORT_LIMIT}`
+  );
+  await record({
+    actor_id: req.user.id,
+    actor_email: req.user.email,
+    action: 'admin.export',
+    outcome: 'allowed',
+    details: { what: 'users', rows: rows.length },
+    ip: req.ip,
+  });
+  sendCsv(res, `trustvault-users-${today()}.csv`, toCsv(
+    ['id', 'name', 'email', 'role', 'is_active', 'created_at'],
+    rows.map((u) => [u.id, u.name, u.email, u.role, u.is_active, u.created_at])
+  ));
 });
 
 // Only these two fields can change. Anything else in the body is rejected.
@@ -202,6 +281,5 @@ router.patch('/users/:id', async (req, res) => {
     client.release();
   }
 });
-
 
 module.exports = router;

@@ -621,6 +621,22 @@ async function documentsView() {
 }
 
 // ---------- admin ----------
+ICONS.download = [
+  ['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }],
+  ['polyline', { points: '7 10 12 15 17 10' }],
+  ['line', { x1: 12, y1: 15, x2: 12, y2: 3 }],
+];
+
+async function saveCsv(path, filename) {
+  const { data } = await api(path, { blob: true });
+  const url = URL.createObjectURL(data);
+  const a = el('a', { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 async function adminView() {
   const tiles = [
     tile('Events, 24 hours', 'activity'),
@@ -631,7 +647,29 @@ async function adminView() {
   const summary = el('div', { class: 'card' });
   const auditBox = el('div', { class: 'card' });
   const usersBox = el('div', { class: 'card' });
+  const panels = { overview: summary, activity: auditBox, users: usersBox };
+  let allUsers = [];
 
+  // ----- sub tabs and the export button -----
+  const usersCount = el('span', { class: 'pill warn hidden', text: '0' });
+  const tabs = {
+    overview: el('button', { type: 'button', class: 'subtab' }, icon('shield', 16), el('span', { text: 'Overview' })),
+    activity: el('button', { type: 'button', class: 'subtab' }, icon('activity', 16), el('span', { text: 'Activity' })),
+    users: el('button', { type: 'button', class: 'subtab' }, icon('users', 16), el('span', { text: 'Users' }), usersCount),
+  };
+  const exportLabel = el('span', { text: 'Export' });
+  const exportBtn = el('button', { type: 'button', class: 'ghost' }, icon('download', 16), exportLabel);
+
+  function showTab(id) {
+    state.adminTab = id;
+    for (const [k, node] of Object.entries(panels)) node.classList.toggle('hidden', k !== id);
+    for (const [k, b] of Object.entries(tabs)) b.classList.toggle('active', k === id);
+    exportBtn.classList.toggle('hidden', id === 'overview');
+    exportLabel.textContent = id === 'users' ? 'Export users' : 'Export activity';
+  }
+  for (const [id, b] of Object.entries(tabs)) b.addEventListener('click', () => showTab(id));
+
+  // ----- overview -----
   async function loadSummary() {
     try {
       const { data } = await api('/api/admin/summary');
@@ -666,16 +704,23 @@ async function adminView() {
     } catch (err) { toast(err.message, true); }
   }
 
+  // ----- activity -----
   const group = el('select', {}, ['', 'documents', 'permissions', 'auth', 'admin'].map((g) => el('option', { value: g, text: g || 'All activity' })));
   const outcome = el('select', {}, ['', 'allowed', 'denied'].map((o) => el('option', { value: o, text: o || 'Any outcome' })));
   const actor = el('input', { type: 'search', placeholder: 'Actor email contains' });
   const auditList = el('div');
 
+  function auditParams() {
+    const p = new URLSearchParams();
+    if (group.value) p.set('group', group.value);
+    if (outcome.value) p.set('outcome', outcome.value);
+    if (actor.value.trim()) p.set('actor', actor.value.trim());
+    return p;
+  }
+
   async function loadAudit() {
-    const params = new URLSearchParams({ limit: '50' });
-    if (group.value) params.set('group', group.value);
-    if (outcome.value) params.set('outcome', outcome.value);
-    if (actor.value.trim()) params.set('actor', actor.value.trim());
+    const params = auditParams();
+    params.set('limit', '50');
     try {
       const { data, res } = await api('/api/admin/audit?' + params);
       setKids(auditList,
@@ -691,17 +736,20 @@ async function adminView() {
   auditForm.addEventListener('submit', (e) => { e.preventDefault(); loadAudit(); });
   setKids(auditBox, el('h2', { class: 'section-title' }, icon('activity', 20), 'Activity and permission changes'), auditForm, auditList);
 
-  async function loadUsers() {
-    try {
-      const { data } = await api('/api/admin/users');
-      const waiting = data.filter((u) => u.role === 'pending' && u.is_active);
-      tiles[2].set(waiting.length, waiting.length ? 'warn' : '');
-      setKids(usersBox,
-        el('h2', { class: 'section-title' }, icon('users', 20), 'Users'),
-        waiting.length > 0
-          ? el('p', { class: 'note', text: waiting.length + (waiting.length === 1 ? ' account is' : ' accounts are') + ' waiting for approval. Give each one a role below.' })
-          : el('p', { class: 'muted', text: 'No accounts are waiting for approval.' }),
-        table(['Name', 'Email', 'Role', 'Account'], data.map((u) => {
+  // ----- users -----
+  const userSearch = el('input', { type: 'search', placeholder: 'Search name or email' });
+  const roleFilter = el('select', {}, ['', 'pending', 'viewer', 'owner', 'admin'].map((r) => el('option', { value: r, text: r || 'All roles' })));
+  const waitingNote = el('div');
+  const usersTable = el('div');
+
+  function drawUsers() {
+    const term = userSearch.value.trim().toLowerCase();
+    const shown = allUsers.filter((u) =>
+      (!term || u.name.toLowerCase().includes(term) || u.email.toLowerCase().includes(term)) &&
+      (!roleFilter.value || u.role === roleFilter.value));
+    setKids(usersTable, shown.length === 0
+      ? el('p', { class: 'muted', text: 'No users match.' })
+      : table(['Name', 'Email', 'Role', 'Account'], shown.map((u) => {
           const self = u.id === state.user.id;
           const role = el('select', { disabled: self },
             ['pending', 'viewer', 'owner', 'admin'].map((r) => el('option', { value: r, text: r, selected: r === u.role })));
@@ -721,6 +769,27 @@ async function adminView() {
             el('span', {}, u.is_active ? 'active ' : 'LOCKED ', lock),
           ];
         })));
+  }
+  userSearch.addEventListener('input', drawUsers);
+  roleFilter.addEventListener('change', drawUsers);
+  setKids(usersBox,
+    el('h2', { class: 'section-title' }, icon('users', 20), 'Users'),
+    waitingNote,
+    el('div', { class: 'filters' }, userSearch, roleFilter),
+    usersTable);
+
+  async function loadUsers() {
+    try {
+      const { data } = await api('/api/admin/users');
+      allUsers = data;
+      const waiting = data.filter((u) => u.role === 'pending' && u.is_active).length;
+      tiles[2].set(waiting, waiting ? 'warn' : '');
+      usersCount.textContent = String(waiting);
+      usersCount.classList.toggle('hidden', waiting === 0);
+      setKids(waitingNote, waiting > 0
+        ? el('p', { class: 'note', text: waiting + (waiting === 1 ? ' account is' : ' accounts are') + ' waiting for approval. Give each one a role below.' })
+        : el('p', { class: 'muted', text: 'No accounts are waiting for approval.' }));
+      drawUsers();
     } catch (err) { toast(err.message, true); }
   }
 
@@ -734,8 +803,22 @@ async function adminView() {
     loadSummary();
   }
 
+  // ----- export: the current tab's data as a CSV file -----
+  exportBtn.addEventListener('click', () => withBusy(exportBtn, async () => {
+    try {
+      if (state.adminTab === 'users') await saveCsv('/api/admin/users/export', 'trustvault-users.csv');
+      else await saveCsv('/api/admin/audit/export?' + auditParams(), 'trustvault-activity.csv');
+      toast('Export downloaded');
+      loadAudit(); // the export itself now appears in the log
+    } catch (err) { toast(err.message, true); }
+  }));
+
   await Promise.all([loadSummary(), loadAudit(), loadUsers()]);
-  return el('div', { class: 'stack view' }, welcome(tiles), summary, auditBox, usersBox);
+  showTab(state.adminTab || 'overview');
+  return el('div', { class: 'stack view' },
+    welcome(tiles),
+    el('div', { class: 'subnav-row' }, el('div', { class: 'subnav' }, Object.values(tabs)), exportBtn),
+    summary, auditBox, usersBox);
 }
 
 // ---------- shell ----------

@@ -255,3 +255,11 @@ td select { width: auto; padding: 6px 9px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+.subnav-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.subnav { display: inline-flex; flex-wrap: wrap; gap: 6px; padding: 5px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+button.subtab { display: inline-flex; align-items: center; gap: 8px; background: transparent; color: var(--muted); box-shadow: none; padding: 9px 16px; border-radius: 10px; }
+button.subtab:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 9%, #fff); color: var(--ink); transform: none; box-shadow: none; }
+button.subtab.active { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+.pill.warn { background: #fef3c7; color: #92400e; }
+button.subtab.active .pill.warn { background: rgba(255, 255, 255, .9); }
