@@ -9,6 +9,7 @@
     "seed": "node scripts/seed.js",
     "audit-check": "node scripts/audit-check.js",
     "create-admin": "node scripts/create-admin.js",
+     "seed-demo": "node scripts/seed-documents.js",
     "test": "jest --runInBand"
   },
   "keywords": [],
