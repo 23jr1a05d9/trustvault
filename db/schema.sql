@@ -109,3 +109,22 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
   used_at    timestamptz
 );
 CREATE INDEX IF NOT EXISTS recovery_codes_user ON recovery_codes (user_id);
+
+-- The current version number of each document.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+-- DOCUMENT_VERSIONS: earlier files of a document. When an editor replaces the
+-- file, the old one is kept here, so an edit can never destroy the original.
+CREATE TABLE IF NOT EXISTS document_versions (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id       uuid NOT NULL REFERENCES documents(id),
+  version           integer NOT NULL,
+  original_filename text NOT NULL,
+  mime_type         text NOT NULL,
+  size_bytes        bigint NOT NULL,
+  sha256            text NOT NULL,
+  data              bytea NOT NULL,
+  replaced_by       uuid NOT NULL REFERENCES users(id),
+  replaced_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (document_id, version)
+);

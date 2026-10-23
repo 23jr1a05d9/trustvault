@@ -1,6 +1,6 @@
 const pool = require('./db');
 
-const ACTIONS = ['read', 'download', 'edit', 'delete', 'share'];
+const ACTIONS = ['read', 'download', 'edit', 'delete', 'share','history'];
 
 // What each grant level allows. Delete and share are NOT here:
 // only the owner can delete a document or change who has access.

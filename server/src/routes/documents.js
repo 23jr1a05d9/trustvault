@@ -1,3 +1,4 @@
+const { authorize } = require('../authorize');
 const express = require('express');
 const crypto = require('crypto');
 const multer = require('multer');
@@ -190,6 +191,7 @@ router.get('/:id', async (req, res) => {
     original_filename: d.original_filename, mime_type: d.mime_type,
     size_bytes: d.size_bytes, owner_id: d.owner_id,
     created_at: d.created_at, updated_at: d.updated_at,
+    version: d.version,
     access: result.via,
   });
 });
@@ -250,6 +252,206 @@ router.delete('/:id', async (req, res) => {
   } finally {
     client.release();
   }
+});
+
+
+// ---------- editing ----------
+const MAX_VERSIONS = 20; // earlier files kept per document
+
+const patchSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    category: z.string().trim().min(1).max(50).optional(),
+  })
+  .strict() // owner_id, role and anything else in the body is rejected
+  .refine((v) => v.title !== undefined || v.category !== undefined);
+
+// Runs BEFORE the upload is read, so a stranger can not make the server buffer a file.
+async function editGuard(req, res, next) {
+  const result = await guard(req, res, 'edit');
+  if (!result) return; // guard has already answered 404 and audited the refusal
+  req.doc = result.document;
+  next();
+}
+
+// CHANGE TITLE / CATEGORY. Needs the edit level (or owner).
+router.patch('/:id', async (req, res) => {
+  const result = await guard(req, res, 'edit');
+  if (!result) return;
+  const parsed = patchSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide a title and/or a category' });
+  const d = result.document;
+  const title = parsed.data.title ?? d.title;
+  const category = parsed.data.category ?? d.category;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const upd = await client.query(
+      `UPDATE documents SET title = $2, category = $3, updated_at = now()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id, title, category, version, updated_at`,
+      [d.id, title, category]
+    );
+    if (!upd.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+    await record({
+      actor_id: req.user.id,
+      actor_email: req.user.email,
+      action: 'document.edit',
+      outcome: 'allowed',
+      document_id: d.id,
+      // Which fields changed, never their values: titles can be confidential.
+      details: { change: 'details', fields: Object.keys(parsed.data) },
+      ip: req.ip,
+    }, client);
+    await client.query('COMMIT');
+    res.json(upd.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+// REPLACE THE FILE. The old file is kept as an earlier version.
+router.post('/:id/replace', editGuard, receiveFile, async (req, res) => {
+  if (!req.file || req.file.buffer.length === 0) return res.status(400).json({ error: 'A file is required' });
+  const buffer = req.file.buffer;
+  const type = await detectType(buffer);
+  if (!type || !ALLOWED[type.mime]) {
+    await record({
+      actor_id: req.user.id,
+      actor_email: req.user.email,
+      action: 'document.edit',
+      outcome: 'denied',
+      document_id: req.doc.id,
+      details: { reason: 'file_type_not_allowed', claimed_type: String(req.file.mimetype).slice(0, 100) },
+      ip: req.ip,
+    });
+    return res.status(400).json({ error: 'File type not allowed. Allowed: PDF, PNG, JPG, DOCX, XLSX' });
+  }
+  const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query(
+      `SELECT version, original_filename, mime_type, size_bytes, sha256 FROM documents
+        WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [req.doc.id]
+    );
+    // Check again now the file has arrived: access may have been taken away during the upload.
+    const again = await authorize(req.user, req.doc.id, 'edit', client);
+    if (!cur.rows[0] || !again.allowed) {
+      await client.query('ROLLBACK');
+      await record({
+        actor_id: req.user.id,
+        actor_email: req.user.email,
+        action: 'document.edit',
+        outcome: 'denied',
+        document_id: req.doc.id,
+        details: { reason: 'access_removed_during_upload' },
+        ip: req.ip,
+      });
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const old = cur.rows[0];
+
+    const count = await client.query('SELECT count(*)::int AS n FROM document_versions WHERE document_id = $1', [req.doc.id]);
+    if (count.rows[0].n >= MAX_VERSIONS) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This document has reached its limit of ' + MAX_VERSIONS + ' earlier versions' });
+    }
+    const blob = await client.query('SELECT data FROM document_blobs WHERE document_id = $1 FOR UPDATE', [req.doc.id]);
+    if (!blob.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    await client.query(
+      `INSERT INTO document_versions
+         (document_id, version, original_filename, mime_type, size_bytes, sha256, data, replaced_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [req.doc.id, old.version, old.original_filename, old.mime_type, old.size_bytes, old.sha256, blob.rows[0].data, req.user.id]
+    );
+    await client.query('UPDATE document_blobs SET data = $2 WHERE document_id = $1', [req.doc.id, buffer]);
+    const upd = await client.query(
+      `UPDATE documents SET original_filename = $2, mime_type = $3, size_bytes = $4, sha256 = $5,
+              version = version + 1, updated_at = now()
+        WHERE id = $1
+        RETURNING id, title, category, original_filename, mime_type, size_bytes, version, updated_at`,
+      [req.doc.id, cleanName(req.file.originalname), type.mime, buffer.length, sha256]
+    );
+    await record({
+      actor_id: req.user.id,
+      actor_email: req.user.email,
+      action: 'document.edit',
+      outcome: 'allowed',
+      document_id: req.doc.id,
+      details: {
+        change: 'file',
+        from_version: old.version,
+        to_version: upd.rows[0].version,
+        old_sha256: old.sha256,
+        new_sha256: sha256,
+        size: buffer.length,
+        mime: type.mime,
+      },
+      ip: req.ip,
+    }, client);
+    await client.query('COMMIT');
+    res.json(upd.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
+// VERSION HISTORY: owner only, because only the owner has the 'history' action.
+router.get('/:id/versions', async (req, res) => {
+  const result = await guard(req, res, 'history');
+  if (!result) return;
+  const { rows } = await pool.query(
+    `SELECT v.version, v.original_filename, v.mime_type, v.size_bytes, v.replaced_at, u.name AS replaced_by_name
+       FROM document_versions v JOIN users u ON u.id = v.replaced_by
+      WHERE v.document_id = $1 ORDER BY v.version DESC`,
+    [result.document.id]
+  );
+  res.json(rows);
+});
+
+router.get('/:id/versions/:version/download', async (req, res) => {
+  const result = await guard(req, res, 'history');
+  if (!result) return;
+  if (!/^\d{1,6}$/.test(req.params.version)) return res.status(404).json({ error: 'Not found' });
+  const { rows } = await pool.query(
+    'SELECT original_filename, mime_type, data FROM document_versions WHERE document_id = $1 AND version = $2',
+    [result.document.id, Number(req.params.version)]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+
+  await record({ // written before any byte is sent
+    actor_id: req.user.id,
+    actor_email: req.user.email,
+    action: 'document.version_download',
+    outcome: 'allowed',
+    document_id: result.document.id,
+    details: { version: Number(req.params.version) },
+    ip: req.ip,
+  });
+  res.attachment(rows[0].original_filename);
+  res.set({
+    'Content-Type': rows[0].mime_type,
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.send(rows[0].data);
 });
 
 module.exports = router;

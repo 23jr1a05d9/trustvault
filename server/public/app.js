@@ -541,14 +541,16 @@ async function documentsView() {
     try {
       const { data: d } = await api('/api/documents/' + id);
       const mine = d.owner_id === state.user.id;
+      const canEdit = mine || d.access === 'grant:edit';
       const downloadBtn = el('button', { type: 'button', text: 'Download' });
       downloadBtn.addEventListener('click', () => withBusy(downloadBtn, () => download(d.id, d.original_filename)));
       setKids(detail,
         el('div', { class: 'card pop' },
-          el('h2', { text: d.title }),
+          el('h2', {}, d.title, ' ', el('span', { class: 'badge', text: 'v' + d.version })),
           el('dl', { class: 'facts' },
             fact('File', d.original_filename), fact('Type', d.mime_type), fact('Size', fmtSize(d.size_bytes)),
-            fact('Category', d.category), fact('Your access', d.access), fact('Added', fmtDate(d.created_at))),
+            fact('Category', d.category), fact('Your access', d.access), fact('Added', fmtDate(d.created_at)),
+            fact('Last changed', fmtDate(d.updated_at))),
           el('div', { class: 'actions' },
             downloadBtn,
             mine && el('button', {
@@ -563,7 +565,9 @@ async function documentsView() {
                 } catch (err) { toast(err.message, true); }
               },
             }))),
-        mine && (await sharingPanel(d.id)));
+        canEdit && editPanel(d, async () => { await openDoc(d.id); await load(); }),
+        mine && (await sharingPanel(d.id)),
+        mine && (await historyPanel(d)));
     } catch (err) {
       toast(err.message, true);
       load();
