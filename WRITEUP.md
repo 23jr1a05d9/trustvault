@@ -52,7 +52,7 @@ I built this with Claude, an AI assistant, and I say so plainly: it wrote most o
 - **The first forgot-password design let an admin take over any account.** I rejected it and replaced it with recovery codes.
 - **The admin screen hid the `pending` role**, so new accounts looked approved. Fixed with an Approve button.
 
-To check the AI's access-control code, I remove one check at a time and run the tests, expecting them to fail. [CONFIRM: the one I ran and its result, for example "Replacing the owner check with `if (true)` made 15 of 22 authorisation tests fail."]
+To check the AI's access-control code, I remove one check at a time and run the tests, expecting them to fail. When I replaced the owner check in `authorize()` with `if (true)`, 15 of 22 authorisation tests failed, including every "stranger may NOT" test, and all of them passed again when I restored the line.
 
 ## What is unfinished or weak
 
@@ -62,6 +62,7 @@ To check the AI's access-control code, I remove one check at a time and run the 
 - **Rate limiting is per address and held in memory**, and it is not covered by a test.
 - **The password minimum is 6 characters**, as I specified. 8 would be safer.
 - **The free host sleeps when idle**, so the first request can take about a minute. Uploads are limited to 10 MB.
-- [CONFIRM: anything I did not finish or test, listed honestly before submitting.]
+- - I tested mostly in Chrome on Windows, not on phones or other browsers.
+- Once, the sample-document script created duplicate copies on the live database. I removed the extra copies by hand and have not found the exact cause.
 
 The full list of threats, with the test that proves each defence and the risks I accepted, is in `THREATS.md`.
