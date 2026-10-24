@@ -3,7 +3,7 @@
 Secure document sharing with a real audit trail, built for the Snovasys Fresher Hiring Challenge 2026.
 
 - **Live site:** https://trustvault-demo-li4x.onrender.com (the free host sleeps when idle, so the first request can take about a minute)
-- **Demo video:** PASTE_VIDEO_LINK_HERE
+- **Demo video:** https://drive.google.com/file/d/17J7K8mvOWADAKkbHo-vHb5E90yfx0M7h/view?usp=sharing
 - **Write-up:** [WRITEUP.md](WRITEUP.md)
 - **Threat model:** [THREATS.md](THREATS.md)
 - **How I used AI:** [PROMPTS.md](PROMPTS.md) and [CLAUDE.md](CLAUDE.md)
