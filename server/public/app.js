@@ -549,7 +549,7 @@ async function documentsView() {
           el('h2', {}, d.title, ' ', el('span', { class: 'badge', text: 'v' + d.version })),
           el('dl', { class: 'facts' },
             fact('File', d.original_filename), fact('Type', d.mime_type), fact('Size', fmtSize(d.size_bytes)),
-            fact('Category', d.category), fact('Your access', d.access), fact('Added', fmtDate(d.created_at)),
+            fact('Category', d.category), fact('Your access', String(d.access).replace('grant:', '')), fact('Added', fmtDate(d.created_at)),
             fact('Last changed', fmtDate(d.updated_at))),
           el('div', { class: 'actions' },
             downloadBtn,
